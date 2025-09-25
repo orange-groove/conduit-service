@@ -249,6 +249,20 @@ class SupabaseClient:
                 "is_active": True
             }
             self.client.table("user_events").insert(user_event_data).execute()
+            
+            # Also add user to video call participants if video call exists
+            try:
+                video_call_response = self.client.table("video_calls").select("*").eq("event_id", event_id).eq("is_active", True).limit(1).execute()
+                if video_call_response.data:
+                    video_call = video_call_response.data[0]
+                    participants = video_call.get("participants", [])
+                    if user_id not in participants:
+                        participants.append(user_id)
+                        await self.update_video_call(video_call["id"], {"participants": participants})
+            except Exception as e:
+                print(f"Error adding user to video call participants: {e}")
+                # Don't fail the join event if video call update fails
+            
             return True
         except Exception as e:
             print(f"Error joining event: {e}")
@@ -258,6 +272,20 @@ class SupabaseClient:
         """Remove user from event"""
         try:
             self.client.table("user_events").update({"is_active": False}).eq("user_id", user_id).eq("event_id", event_id).execute()
+            
+            # Also remove user from video call participants if video call exists
+            try:
+                video_call_response = self.client.table("video_calls").select("*").eq("event_id", event_id).eq("is_active", True).limit(1).execute()
+                if video_call_response.data:
+                    video_call = video_call_response.data[0]
+                    participants = video_call.get("participants", [])
+                    if user_id in participants:
+                        participants.remove(user_id)
+                        await self.update_video_call(video_call["id"], {"participants": participants})
+            except Exception as e:
+                print(f"Error removing user from video call participants: {e}")
+                # Don't fail the leave event if video call update fails
+            
             return True
         except Exception as e:
             print(f"Error leaving event: {e}")

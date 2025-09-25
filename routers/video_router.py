@@ -373,19 +373,37 @@ async def get_event_video_call(
                 # If there are inactive calls, reactivate the first one
                 inactive_call = all_calls_response.data[0]
                 await db.update_video_call(inactive_call["id"], {"is_active": True})
+                # Ensure user is in participants
+                participants = inactive_call.get("participants", [])
+                if current_user.id not in participants:
+                    participants.append(current_user.id)
+                    await db.update_video_call(inactive_call["id"], {"participants": participants})
                 return VideoCall(**inactive_call)
             else:
                 # No video call exists at all, create one
                 print(f"No video call found for event {event_id}, creating one...")
                 created_call = await db.ensure_event_video_call(event_id, current_user.id)
                 if created_call:
+                    # Ensure user is in participants
+                    participants = created_call.get("participants", [])
+                    if current_user.id not in participants:
+                        participants.append(current_user.id)
+                        await db.update_video_call(created_call["id"], {"participants": participants})
                     return VideoCall(**created_call)
                 else:
                     raise HTTPException(
                         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                         detail="Failed to create video call for event"
                     )
-        return VideoCall(**response.data[0])
+        
+        # Video call exists, ensure user is in participants
+        video_call = response.data[0]
+        participants = video_call.get("participants", [])
+        if current_user.id not in participants:
+            participants.append(current_user.id)
+            await db.update_video_call(video_call["id"], {"participants": participants})
+        
+        return VideoCall(**video_call)
     except HTTPException:
         raise
     except Exception as e:
