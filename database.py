@@ -721,6 +721,31 @@ class SupabaseClient:
         except Exception as e:
             print(f"Error fetching pins in bounds: {e}")
             return []
+    
+    async def ensure_event_video_call(self, event_id: str, creator_id: str) -> Optional[Dict[str, Any]]:
+        """Ensure a video call exists for an event, create one if it doesn't"""
+        try:
+            # Check if video call already exists
+            response = self.client.table("video_calls").select("*").eq("event_id", event_id).execute()
+            
+            if response.data:
+                # Video call exists, return it
+                return response.data[0]
+            else:
+                # Create new video call
+                video_call_data = {
+                    "id": str(uuid.uuid4()),
+                    "event_id": event_id,
+                    "creator_id": creator_id,
+                    "participants": [creator_id],
+                    "is_group_call": True,
+                    "is_active": True,
+                    "started_at": datetime.utcnow().isoformat()
+                }
+                return await self.create_video_call(video_call_data)
+        except Exception as e:
+            print(f"Error ensuring video call for event {event_id}: {e}")
+            return None
 
 
 # Global database instance

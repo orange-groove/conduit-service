@@ -366,10 +366,25 @@ async def get_event_video_call(
     try:
         response = db.client.table("video_calls").select("*").eq("event_id", event_id).eq("is_active", True).limit(1).execute()
         if not response.data:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="No active video call found for this event"
-            )
+            # Check if there are any video calls for this event (even inactive ones)
+            all_calls_response = db.client.table("video_calls").select("*").eq("event_id", event_id).execute()
+            if all_calls_response.data:
+                print(f"Found inactive video calls for event {event_id}: {all_calls_response.data}")
+                # If there are inactive calls, reactivate the first one
+                inactive_call = all_calls_response.data[0]
+                await db.update_video_call(inactive_call["id"], {"is_active": True})
+                return VideoCall(**inactive_call)
+            else:
+                # No video call exists at all, create one
+                print(f"No video call found for event {event_id}, creating one...")
+                created_call = await db.ensure_event_video_call(event_id, current_user.id)
+                if created_call:
+                    return VideoCall(**created_call)
+                else:
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Failed to create video call for event"
+                    )
         return VideoCall(**response.data[0])
     except HTTPException:
         raise

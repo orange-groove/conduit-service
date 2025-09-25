@@ -61,7 +61,12 @@ async def create_event(
         "started_at": datetime.utcnow().isoformat()
     }
     
-    await db.create_video_call(video_call_data)
+    try:
+        video_call_result = await db.create_video_call(video_call_data)
+        if not video_call_result:
+            print(f"Warning: Failed to create video call for event {created_event['id']}")
+    except Exception as e:
+        print(f"Error creating video call for event {created_event['id']}: {e}")
     
     return Event(**created_event)
 
