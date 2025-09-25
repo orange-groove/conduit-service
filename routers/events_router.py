@@ -190,6 +190,35 @@ async def join_event(
     # Join event
     success = await db.join_event(current_user.id, event_id)
     if success:
+        # Also add user to the video call for this event
+        try:
+            # Get the video call for this event
+            video_calls = await db.get_user_active_calls(current_user.id)
+            event_video_call = None
+            for call in video_calls:
+                if call.get("event_id") == event_id:
+                    event_video_call = call
+                    break
+            
+            # If no video call found, get it directly
+            if not event_video_call:
+                try:
+                    response = db.client.table("video_calls").select("*").eq("event_id", event_id).eq("is_active", True).limit(1).execute()
+                    if response.data:
+                        event_video_call = response.data[0]
+                except Exception as e:
+                    print(f"Error fetching video call for event: {e}")
+            
+            # Add user to video call participants
+            if event_video_call:
+                participants = event_video_call.get("participants", [])
+                if current_user.id not in participants:
+                    participants.append(current_user.id)
+                    await db.update_video_call(event_video_call["id"], {"participants": participants})
+        except Exception as e:
+            print(f"Error adding user to video call: {e}")
+            # Don't fail the join event if video call update fails
+        
         return EventInviteResponse(
             success=True,
             message="Successfully joined event",
@@ -226,6 +255,23 @@ async def leave_event(
     # Leave event
     success = await db.leave_event(current_user.id, event_id)
     if success:
+        # Also remove user from the video call for this event
+        try:
+            # Get the video call for this event
+            try:
+                response = db.client.table("video_calls").select("*").eq("event_id", event_id).eq("is_active", True).limit(1).execute()
+                if response.data:
+                    event_video_call = response.data[0]
+                    participants = event_video_call.get("participants", [])
+                    if current_user.id in participants:
+                        participants.remove(current_user.id)
+                        await db.update_video_call(event_video_call["id"], {"participants": participants})
+            except Exception as e:
+                print(f"Error removing user from video call: {e}")
+                # Don't fail the leave event if video call update fails
+        except Exception as e:
+            print(f"Error processing video call removal: {e}")
+        
         return EventInviteResponse(
             success=True,
             message="Successfully left event"

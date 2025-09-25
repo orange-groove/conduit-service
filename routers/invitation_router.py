@@ -138,6 +138,32 @@ async def respond_to_invitation(
             detail="Failed to respond to invitation"
         )
     
+    # If invitation was accepted, add user to video call
+    if response_data.response == "accepted":
+        try:
+            # Get the invitation to find the event_id
+            invitation = (await db.client.table("event_invitations")
+                            .select("event_id")
+                            .eq("id", response_data.invitation_id)
+                            .single()
+                            .execute()).data
+            
+            if invitation:
+                event_id = invitation["event_id"]
+                # Get the video call for this event
+                try:
+                    response = db.client.table("video_calls").select("*").eq("event_id", event_id).eq("is_active", True).limit(1).execute()
+                    if response.data:
+                        event_video_call = response.data[0]
+                        participants = event_video_call.get("participants", [])
+                        if current_user.id not in participants:
+                            participants.append(current_user.id)
+                        await db.update_video_call(event_video_call["id"], {"participants": participants})
+                except Exception as e:
+                    print(f"Error adding user to video call after invitation acceptance: {e}")
+        except Exception as e:
+            print(f"Error processing video call addition after invitation acceptance: {e}")
+    
     return {
         "success": True,
         "message": f"Invitation {response_data.response} successfully"
