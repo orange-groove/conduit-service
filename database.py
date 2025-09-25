@@ -6,7 +6,7 @@ from typing import Optional, Dict, Any, List
 
 class SupabaseClient:
     def __init__(self):
-        # Use single client for all operations
+        # Use the configured key (should be service role key for server operations)
         self.client: Client = create_client(
             settings.supabase_url,
             settings.supabase_key
