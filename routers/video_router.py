@@ -349,7 +349,7 @@ async def get_event_video_call(
     event_id: str,
     current_user: User = Depends(get_current_active_user)
 ):
-    """Get the video call for a specific event"""
+    """Get or create the video call for a specific event (on-demand)"""
     # Check if user is participant in event
     user_events = await db.get_user_events(current_user.id)
     is_participant = any(
@@ -364,53 +364,45 @@ async def get_event_video_call(
         )
     
     try:
+        # Check if active video call exists
         response = db.client.table("video_calls").select("*").eq("event_id", event_id).eq("is_active", True).limit(1).execute()
-        if not response.data:
-            # Check if there are any video calls for this event (even inactive ones)
-            all_calls_response = db.client.table("video_calls").select("*").eq("event_id", event_id).execute()
-            if all_calls_response.data:
-                print(f"Found inactive video calls for event {event_id}: {all_calls_response.data}")
-                # If there are inactive calls, reactivate the first one
-                inactive_call = all_calls_response.data[0]
-                await db.update_video_call(inactive_call["id"], {"is_active": True})
-                # Ensure user is in participants
-                participants = inactive_call.get("participants", [])
-                if current_user.id not in participants:
-                    participants.append(current_user.id)
-                    await db.update_video_call(inactive_call["id"], {"participants": participants})
-                return VideoCall(**inactive_call)
+        
+        if response.data:
+            # Active video call exists, add user to participants if not already there
+            video_call = response.data[0]
+            participants = video_call.get("participants", [])
+            if current_user.id not in participants:
+                participants.append(current_user.id)
+                await db.update_video_call(video_call["id"], {"participants": participants})
+            return VideoCall(**video_call)
+        else:
+            # No active video call, create one on-demand
+            video_call_data = {
+                "id": str(uuid.uuid4()),
+                "event_id": event_id,
+                "creator_id": current_user.id,
+                "participants": [current_user.id],
+                "is_group_call": True,
+                "is_active": True,
+                "started_at": datetime.utcnow().isoformat()
+            }
+            
+            created_call = await db.create_video_call(video_call_data)
+            if created_call:
+                return VideoCall(**created_call)
             else:
-                # No video call exists at all, create one
-                print(f"No video call found for event {event_id}, creating one...")
-                created_call = await db.ensure_event_video_call(event_id, current_user.id)
-                if created_call:
-                    # Ensure user is in participants
-                    participants = created_call.get("participants", [])
-                    if current_user.id not in participants:
-                        participants.append(current_user.id)
-                        await db.update_video_call(created_call["id"], {"participants": participants})
-                    return VideoCall(**created_call)
-                else:
-                    raise HTTPException(
-                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail="Failed to create video call for event"
-                    )
-        
-        # Video call exists, ensure user is in participants
-        video_call = response.data[0]
-        participants = video_call.get("participants", [])
-        if current_user.id not in participants:
-            participants.append(current_user.id)
-            await db.update_video_call(video_call["id"], {"participants": participants})
-        
-        return VideoCall(**video_call)
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to create video call for event"
+                )
+                
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error fetching event video call: {e}")
+        print(f"Error fetching/creating event video call: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch event video call"
+            detail="Failed to fetch/create event video call"
         )
 
 
@@ -456,3 +448,72 @@ async def get_call_participants(
         "participants": participant_details,
         "total_participants": len(participant_details)
     }
+
+
+@router.delete("/{call_id}/participants/{user_id}")
+async def remove_participant_from_call(
+    call_id: str,
+    user_id: str,
+    current_user: User = Depends(get_current_active_user)
+):
+    """Remove a participant from a video call (only call creator can remove participants)"""
+    try:
+        # Get the video call
+        call_data = await db.get_video_call(call_id)
+        if not call_data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Video call not found"
+            )
+        
+        # Check if current user is the call creator
+        if call_data["creator_id"] != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only call creator can remove participants"
+            )
+        
+        # Check if user is trying to remove themselves
+        if user_id == current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Call creator cannot remove themselves. Use leave call instead."
+            )
+        
+        # Check if the user is actually a participant
+        participants = call_data.get("participants", [])
+        if user_id not in participants:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="User is not a participant in this video call"
+            )
+        
+        # Remove user from video call participants
+        participants.remove(user_id)
+        success = await db.update_video_call(call_id, {"participants": participants})
+        
+        if success:
+            # Also disconnect the user from WebSocket if connected
+            try:
+                video_manager.disconnect(call_id, user_id)
+            except Exception as e:
+                print(f"Error disconnecting user from WebSocket: {e}")
+            
+            return {
+                "success": True,
+                "message": f"User {user_id} removed from video call successfully"
+            }
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Failed to remove participant from video call"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error removing participant from video call: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to remove participant from video call"
+        )

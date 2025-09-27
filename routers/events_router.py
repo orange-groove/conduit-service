@@ -50,23 +50,7 @@ async def create_event(
     # Add creator as participant
     await db.join_event(current_user.id, created_event["id"], "creator")
     
-    # Create video call room for the event
-    video_call_data = {
-        "id": str(uuid.uuid4()),
-        "event_id": created_event["id"],
-        "creator_id": current_user.id,
-        "participants": [current_user.id],
-        "is_group_call": True,
-        "is_active": True,
-        "started_at": datetime.utcnow().isoformat()
-    }
-    
-    try:
-        video_call_result = await db.create_video_call(video_call_data)
-        if not video_call_result:
-            print(f"Warning: Failed to create video call for event {created_event['id']}")
-    except Exception as e:
-        print(f"Error creating video call for event {created_event['id']}: {e}")
+    # Note: Video call will be created on-demand when first user joins
     
     return Event(**created_event)
 
@@ -76,9 +60,7 @@ async def get_user_events(
     current_user: User = Depends(get_current_active_user)
 ):
     """Get all events for the current user"""
-    print(f"🔍 Getting events for user: {current_user.id}")
     user_events = await db.get_user_events(current_user.id)
-    print(f"🔍 Retrieved events: {user_events}")
     
     events = []
     for event_data in user_events:
@@ -87,8 +69,6 @@ async def get_user_events(
         except Exception as e:
             print(f"Error creating Event object: {e}")
             print(f"Event data: {event_data}")
-    
-    print(f"🔍 Returning {len(events)} events")
     return events
 
 
@@ -285,6 +265,67 @@ async def leave_event(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Failed to leave event"
+        )
+
+
+@router.delete("/{event_id}/participants/{user_id}")
+async def remove_participant(
+    event_id: str,
+    user_id: str,
+    current_user: User = Depends(get_current_active_user)
+):
+    """Remove a participant from an event (only event creator can remove participants)"""
+    # Check if event exists
+    event_data = await db.get_event(event_id)
+    if not event_data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Event not found"
+        )
+    
+    # Check if current user is the event creator
+    if event_data["creator_id"] != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only event creator can remove participants"
+        )
+    
+    # Check if user is trying to remove themselves
+    if user_id == current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Event creator cannot remove themselves. Use leave event instead."
+        )
+    
+    # Check if the user is actually a participant in user_events table
+    try:
+        response = db.client.table("user_events").select("user_id").eq("event_id", event_id).eq("user_id", user_id).eq("is_active", True).execute()
+        is_participant = len(response.data) > 0
+    except Exception as e:
+        print(f"Error checking participant status: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to check participant status"
+        )
+    
+    if not is_participant:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User is not a participant in this event"
+        )
+    
+    # Remove user from event
+    success = await db.leave_event(user_id, event_id)
+    
+    if success:
+        return {
+            "success": True,
+            "message": f"User {user_id} removed from event successfully"
+        }
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to remove participant from event"
         )
 
 

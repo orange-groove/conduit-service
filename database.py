@@ -89,18 +89,10 @@ class SupabaseClient:
     async def authenticate_user(self, email: str, password: str) -> Dict[str, Any]:
         """Authenticate user with Supabase Auth"""
         try:
-            print(f"🔍 Database: Attempting Supabase auth for: {email}")
-            print(f"🔍 Database: Using client with URL: {settings.supabase_url}")
-            print(f"🔍 Database: Using key: {settings.supabase_key[:20]}...")
-            
             response = self.client.auth.sign_in_with_password({
                 "email": email,
                 "password": password
             })
-            
-            print(f"🔍 Database: Supabase response type: {type(response)}")
-            print(f"🔍 Database: Supabase response user: {response.user}")
-            print(f"🔍 Database: Supabase response session: {bool(response.session)}")
             
             if response.user:
                 print(f"✅ Database: Supabase auth successful for user: {response.user.id}")
@@ -216,23 +208,17 @@ class SupabaseClient:
     async def get_user_events(self, user_id: str) -> List[Dict[str, Any]]:
         """Get all events for a user"""
         try:
-            print(f"🔍 Fetching events for user: {user_id}")
-            
             # First get the user's event IDs
             user_events_response = self.client.table("user_events").select("event_id").eq("user_id", user_id).eq("is_active", True).execute()
-            print(f"🔍 User events response: {user_events_response.data}")
             
             if not user_events_response.data:
-                print(f"🔍 No user events found for user: {user_id}")
                 return []
             
             # Extract event IDs
             event_ids = [ue["event_id"] for ue in user_events_response.data]
-            print(f"🔍 Event IDs: {event_ids}")
             
             # Get the actual events
             events_response = self.client.table("events").select("*").in_("id", event_ids).execute()
-            print(f"🔍 Events response: {events_response.data}")
             
             return events_response.data or []
         except Exception as e:
@@ -250,18 +236,8 @@ class SupabaseClient:
             }
             self.client.table("user_events").insert(user_event_data).execute()
             
-            # Also add user to video call participants if video call exists
-            try:
-                video_call_response = self.client.table("video_calls").select("*").eq("event_id", event_id).eq("is_active", True).limit(1).execute()
-                if video_call_response.data:
-                    video_call = video_call_response.data[0]
-                    participants = video_call.get("participants", [])
-                    if user_id not in participants:
-                        participants.append(user_id)
-                        await self.update_video_call(video_call["id"], {"participants": participants})
-            except Exception as e:
-                print(f"Error adding user to video call participants: {e}")
-                # Don't fail the join event if video call update fails
+            # Note: Users are NOT automatically added to video calls
+            # Video calls are created/joined on-demand when users click "Join Video"
             
             return True
         except Exception as e:
@@ -273,18 +249,9 @@ class SupabaseClient:
         try:
             self.client.table("user_events").update({"is_active": False}).eq("user_id", user_id).eq("event_id", event_id).execute()
             
-            # Also remove user from video call participants if video call exists
-            try:
-                video_call_response = self.client.table("video_calls").select("*").eq("event_id", event_id).eq("is_active", True).limit(1).execute()
-                if video_call_response.data:
-                    video_call = video_call_response.data[0]
-                    participants = video_call.get("participants", [])
-                    if user_id in participants:
-                        participants.remove(user_id)
-                        await self.update_video_call(video_call["id"], {"participants": participants})
-            except Exception as e:
-                print(f"Error removing user from video call participants: {e}")
-                # Don't fail the leave event if video call update fails
+            # Note: Users are NOT automatically removed from video calls
+            # They can still participate in video calls even if they leave the event
+            # Video call management is separate from event participation
             
             return True
         except Exception as e:
@@ -454,7 +421,6 @@ class SupabaseClient:
     async def get_event_invitations(self, event_id: str) -> List[Dict[str, Any]]:
         """Get all invitations for an event with full user data for inviter and invitee"""
         try:
-            print(f"🔍 Fetching invitations for event: {event_id}")
             
             # Try different Supabase join syntaxes
             try:
@@ -471,7 +437,6 @@ class SupabaseClient:
                     )
                 """).eq("event_id", event_id).order("created_at", desc=True).execute()
                 
-                print(f"🔍 Method 1 response: {response.data}")
                 
                 # Check if joins worked
                 if response.data and all(inv.get("inviter") and inv.get("invitee") for inv in response.data):
@@ -484,9 +449,7 @@ class SupabaseClient:
                 print(f"❌ Method 1 error: {e}")
             
             # Method 2: Manual fetching (guaranteed to work)
-            print("🔍 Using manual approach...")
             simple_response = self.client.table("event_invitations").select("*").eq("event_id", event_id).order("created_at", desc=True).execute()
-            print(f"🔍 Simple invitations: {simple_response.data}")
             
             enriched_invitations = []
             for inv in simple_response.data or []:
@@ -494,22 +457,18 @@ class SupabaseClient:
                     # Fetch inviter data
                     inviter_data = None
                     if inv.get("inviter_id"):
-                        print(f"🔍 Fetching inviter data for ID: {inv['inviter_id']}")
                         inviter_response = self.client.table("profiles").select("*").eq("id", inv["inviter_id"]).execute()
                         if inviter_response.data:
                             inviter_data = inviter_response.data[0]
-                            print(f"🔍 Fetched inviter data: {inviter_data}")
                         else:
                             print(f"❌ No inviter data found for ID: {inv['inviter_id']}")
                     
                     # Fetch invitee data
                     invitee_data = None
                     if inv.get("invitee_id"):
-                        print(f"🔍 Fetching invitee data for ID: {inv['invitee_id']}")
                         invitee_response = self.client.table("profiles").select("*").eq("id", inv["invitee_id"]).execute()
                         if invitee_response.data:
                             invitee_data = invitee_response.data[0]
-                            print(f"🔍 Fetched invitee data: {invitee_data}")
                         else:
                             print(f"❌ No invitee data found for ID: {inv['invitee_id']}")
                     
@@ -523,7 +482,6 @@ class SupabaseClient:
                     print(f"Error enriching invitation {inv.get('id')}: {e}")
                     enriched_invitations.append(inv)
             
-            print(f"🔍 Final enriched invitations: {enriched_invitations}")
             return enriched_invitations
             
         except Exception as e:
@@ -559,7 +517,15 @@ class SupabaseClient:
                 invitation = self.client.table("event_invitations").select("event_id").eq("id", invitation_id).execute()
                 if invitation.data:
                     event_id = invitation.data[0]["event_id"]
-                    await self.join_event(user_id, event_id, "participant")
+                    
+                    # Check if user is already in the event
+                    existing_check = self.client.table("user_events").select("user_id").eq("event_id", event_id).eq("user_id", user_id).eq("is_active", True).execute()
+                    
+                    if not existing_check.data:
+                        # User not in event, add them
+                        await self.join_event(user_id, event_id, "participant")
+                        # Note: User is NOT automatically added to video calls
+                        # They must manually join video calls when ready
             
             return True
         except Exception as e:
@@ -577,7 +543,6 @@ class SupabaseClient:
                 )
             """).eq("event_id", event_id).eq("is_active", True).execute()
             
-            print(f"🔍 Database response for event {event_id}: {response.data}")
             return response.data or []
         except Exception as e:
             print(f"Error fetching event participants: {e}")

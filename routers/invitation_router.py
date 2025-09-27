@@ -200,17 +200,13 @@ async def get_event_participants_and_invitations(
             try:
                 # Ensure all required fields are present with defaults
                 user_data = p["user"]
-                print(f"🔍 Raw user data: {user_data}")  # Debug logging
-                
                 user_data.setdefault("role", "user")
                 user_data.setdefault("is_active", True)
                 user_data.setdefault("last_seen", None)
                 user_data.setdefault("created_at", "2024-01-01T00:00:00Z")
                 user_data.setdefault("updated_at", None)
                 
-                print(f"🔍 Processed user data: {user_data}")  # Debug logging
                 user_obj = User(**user_data)
-                print(f"🔍 Created User object: {user_obj}")  # Debug logging
                 participants.append(user_obj)
             except Exception as e:
                 print(f"Error creating User object: {e}")
@@ -266,7 +262,6 @@ async def get_event_participants_and_invitations(
             else:
                 inv["invitee"] = None
             
-            print(f"🔍 Processed invitation: {inv}")  # Debug logging
             invitations.append(EventInvitation(**inv))
         except Exception as e:
             print(f"Error creating EventInvitation object: {e}")

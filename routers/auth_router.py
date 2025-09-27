@@ -4,6 +4,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from models import User, UserCreate, Token, UserUpdate
 import logging
+from jose import JWTError, jwt
 from auth import (
     authenticate_user_credentials,
     create_access_token,
@@ -33,36 +34,55 @@ class LoginResponse(BaseModel):
 @router.post("/register", response_model=User)
 async def register_user(user_data: UserCreate):
     """Register a new user"""
-    # Prepare user data for Supabase
-    user_metadata = {
-        "full_name": user_data.full_name,
-        "avatar_url": user_data.avatar_url,
-        "phone_number": user_data.phone_number,
-        "role": "user",
-        "is_active": True
-    }
-    
-    # Create user in Supabase (this now handles duplicate checking)
-    result = await db.create_user(
-        email=user_data.email,
-        password=user_data.password,
-        user_data=user_metadata
-    )
-    
-    if not result["success"]:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=result["message"]
+    try:
+        # Check Supabase client initialization
+        if not db.client:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Database connection not available"
+            )
+        
+        # Prepare user data for Supabase
+        user_metadata = {
+            "full_name": user_data.full_name,
+            "avatar_url": user_data.avatar_url,
+            "phone_number": user_data.phone_number,
+            "role": "user",
+            "is_active": True
+        }
+        
+        # Create user in Supabase (this now handles duplicate checking)
+        result = await db.create_user(
+            email=user_data.email,
+            password=user_data.password,
+            user_data=user_metadata
         )
-    
-    # Get the created user profile
-    user_profile = await db.get_user_profile(result["user"].id)
-    if not user_profile:
+        
+        if not result["success"]:
+            error_message = result["message"]
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=error_message
+            )
+        
+        # Get the created user profile
+        user_profile = await db.get_user_profile(result["user"].id)
+        if not user_profile:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="User created but profile not found"
+            )
+        
+        return User(**user_profile)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Registration error: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="User created but profile not found"
+            detail=f"Registration failed: {str(e)}"
         )
-    return User(**user_profile)
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -167,21 +187,88 @@ async def update_current_user_profile(
 
 
 @router.post("/refresh", response_model=RefreshTokenResponse)
-async def refresh_access_token(current_user: User = Depends(get_current_active_user)):
-    """Issue a new short-lived API access token for the authenticated user.
-
-    The frontend should call this endpoint when nearing expiry. We do not require
-    a Supabase refresh token here; we simply mint a new API JWT for the current user.
+async def refresh_access_token(request: Request):
+    """Refresh the access token using the current (possibly expired) token.
+    
+    This endpoint validates the current token (even if expired) and issues a new one.
     """
     try:
+        print(f"🔍 Refresh token request received")
+        
+        # Get the authorization header
+        auth_header = request.headers.get("Authorization")
+        print(f"🔍 Auth header: {auth_header}")
+        
+        if not auth_header or not auth_header.startswith("Bearer "):
+            print("❌ Missing or invalid authorization header")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Missing or invalid authorization header"
+            )
+        
+        # Extract the current token (even if expired)
+        current_token = auth_header.split(" ")[1]
+        print(f"🔍 Current token: {current_token[:20]}...")
+        
+        # Decode the token to get user ID (even if expired)
+        try:
+            payload = jwt.decode(current_token, settings.secret_key, algorithms=[settings.algorithm], options={"verify_exp": False})
+            user_id = payload.get("sub")
+            print(f"🔍 Decoded user ID: {user_id}")
+            
+            if not user_id:
+                print("❌ Invalid token payload - no user ID")
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid token payload"
+                )
+        except jwt.JWTError as e:
+            print(f"❌ JWT decode error: {e}")
+            logger.error(f"Invalid token: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token"
+            )
+        
+        # Verify user still exists and is active
+        print(f"🔍 Checking user profile for: {user_id}")
+        user_profile = await db.get_user_profile(user_id)
+        print(f"🔍 User profile: {user_profile}")
+        
+        if not user_profile:
+            print("❌ User not found")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found"
+            )
+        
+        if not user_profile.get("is_active", True):
+            print("❌ User account is inactive")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User account is inactive"
+            )
+        
+        # Create new access token
+        print(f"🔍 Creating new token for user: {user_id}")
         access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
-        token = create_access_token(data={"sub": current_user.id}, expires_delta=access_token_expires)
+        new_token = create_access_token(
+            data={"sub": user_id}, 
+            expires_delta=access_token_expires
+        )
+        
+        print(f"✅ Token refreshed successfully for user: {user_id}")
+        logger.info(f"✅ Token refreshed for user: {user_id}")
         return RefreshTokenResponse(
-            access_token=token,
+            access_token=new_token,
             token_type="bearer",
             expires_in=int(settings.access_token_expire_minutes * 60)
         )
+        
+    except HTTPException:
+        raise
     except Exception as e:
+        print(f"❌ Refresh token error: {e}")
         logger.error(f"💥 Refresh token error: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
