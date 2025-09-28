@@ -1,6 +1,6 @@
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from models import AgendaItem, AgendaItemCreate, AgendaItemUpdate, User
+from models import AgendaItem, AgendaItemCreate, AgendaItemUpdate, User, EventPin, AgendaItemWithPin
 from auth import get_current_active_user
 from database import db
 import uuid
@@ -36,8 +36,8 @@ async def create_agenda_item(
         agenda_dict["end_time"] = None
     if agenda_dict.get("description") == "":
         agenda_dict["description"] = None
-    if agenda_dict.get("location") == "":
-        agenda_dict["location"] = None
+    if agenda_dict.get("pin_id") == "":
+        agenda_dict["pin_id"] = None
     
     agenda_dict.update({
         "id": str(uuid.uuid4()),
@@ -56,7 +56,7 @@ async def create_agenda_item(
     return AgendaItem(**created_item)
 
 
-@router.get("/event/{event_id}", response_model=List[AgendaItem])
+@router.get("/event/{event_id}", response_model=List[AgendaItemWithPin])
 async def get_event_agenda(
     event_id: str,
     start_date: date = Query(None, description="Filter by start date"),
@@ -168,6 +168,55 @@ async def delete_agenda_item(
         )
     
     return {"message": "Agenda item deleted successfully"}
+
+
+@router.get("/event/{event_id}/pins", response_model=List[EventPin])
+async def get_event_pins_for_agenda(
+    event_id: str,
+    current_user: User = Depends(get_current_active_user)
+):
+    """Get event pins for agenda location selection"""
+    # Check if user is participant in the event
+    user_events = await db.get_user_events(current_user.id)
+    is_participant = any(
+        event.get("id") == event_id 
+        for event in user_events
+    )
+    
+    if not is_participant:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: not a participant in this event"
+        )
+    
+    # Get event pins
+    pins = await db.get_event_pins(event_id)
+    return pins
+
+
+@router.get("/event/{event_id}/pins/search", response_model=List[EventPin])
+async def search_event_pins_for_agenda(
+    event_id: str,
+    query: str = Query(..., description="Search query for pin title and description"),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Search event pins for agenda location selection"""
+    # Check if user is participant in the event
+    user_events = await db.get_user_events(current_user.id)
+    is_participant = any(
+        event.get("id") == event_id 
+        for event in user_events
+    )
+    
+    if not is_participant:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: not a participant in this event"
+        )
+    
+    # Search event pins
+    pins = await db.search_event_pins(event_id, query)
+    return pins
 
 
 @router.get("/user/calendar", response_model=List[AgendaItem])

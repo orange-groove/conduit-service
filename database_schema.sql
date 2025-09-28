@@ -100,7 +100,7 @@ CREATE TABLE IF NOT EXISTS agenda_items (
     description TEXT,
     start_time TIMESTAMP WITH TIME ZONE NOT NULL,
     end_time TIMESTAMP WITH TIME ZONE,
-    location TEXT,
+    pin_id UUID REFERENCES event_pins(id) ON DELETE SET NULL,
     is_all_day BOOLEAN NOT NULL DEFAULT false,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE

@@ -149,7 +149,7 @@ class AgendaItemBase(BaseModel):
     description: Optional[str] = None
     start_time: str  # Accept ISO string from frontend
     end_time: Optional[str] = None  # Accept ISO string from frontend
-    location: Optional[str] = None
+    pin_id: Optional[str] = None  # Reference to event pin for location
     is_all_day: bool = False
 
     class Config:
@@ -167,7 +167,7 @@ class AgendaItemUpdate(BaseModel):
     description: Optional[str] = None
     start_time: Optional[str] = None  # Accept ISO string from frontend
     end_time: Optional[str] = None  # Accept ISO string from frontend
-    location: Optional[str] = None
+    pin_id: Optional[str] = None  # Reference to event pin for location
     is_all_day: Optional[bool] = None
 
 
@@ -351,3 +351,8 @@ class EventPin(EventPinBase):
 
 class EventPinWithCreator(EventPin):
     creator: Optional[User] = None
+
+
+class AgendaItemWithPin(AgendaItem):
+    """Agenda item with associated pin information"""
+    pin: Optional[EventPin] = None

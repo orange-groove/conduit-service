@@ -457,9 +457,21 @@ class SupabaseClient:
             return None
     
     async def get_event_agenda(self, event_id: str) -> List[Dict[str, Any]]:
-        """Get agenda items for an event"""
+        """Get agenda items for an event with pin information"""
         try:
-            response = self.client.table("agenda_items").select("*").eq("event_id", event_id).order("start_time").execute()
+            response = self.client.table("agenda_items").select("""
+                *,
+                pin:pin_id (
+                    id,
+                    title,
+                    description,
+                    latitude,
+                    longitude,
+                    pin_type,
+                    color,
+                    icon
+                )
+            """).eq("event_id", event_id).order("start_time").execute()
             return response.data or []
         except Exception as e:
             return []
@@ -785,6 +797,18 @@ class SupabaseClient:
             return response.data or []
         except Exception as e:
             print(f"Error fetching pins in bounds: {e}")
+            return []
+
+    async def search_event_pins(self, event_id: str, query: str) -> List[Dict[str, Any]]:
+        """Search pins by title and description"""
+        try:
+            # Search in title and description fields
+            response = self.client.table("event_pins").select("""
+                *,
+                creator:creator_id (id, full_name, avatar_url)
+            """).eq("event_id", event_id).or_(f"title.ilike.%{query}%,description.ilike.%{query}%").execute()
+            return response.data or []
+        except Exception as e:
             return []
     
     async def ensure_event_video_call(self, event_id: str, creator_id: str) -> Optional[Dict[str, Any]]:
