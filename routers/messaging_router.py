@@ -3,11 +3,45 @@ from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSoc
 from models import Message, MessageCreate, MessageWithSender, User
 from auth import get_current_active_user
 from database import db
+from fcm_service import fcm_service
 import uuid
 from datetime import datetime
 import json
 
 router = APIRouter(prefix="/messages", tags=["messaging"])
+
+
+async def send_message_notifications(stored_message: dict, message_create: MessageCreate, sender_id: str):
+    """Send FCM notifications for new messages"""
+    try:
+        # Get sender info
+        sender = await db.get_user_by_id(sender_id)
+        if not sender:
+            return
+        
+        sender_name = sender.get("full_name", "Someone")
+        message_content = stored_message.get("content", "")
+        
+        if message_create.event_id:
+            # Event message - notify all event participants except sender
+            event_participants = await db.get_event_participants(message_create.event_id)
+            for participant in event_participants:
+                if participant.get("id") != sender_id:
+                    await fcm_service.send_message_notification(
+                        recipient_id=participant.get("id"),
+                        sender_name=sender_name,
+                        message_content=message_content,
+                        event_id=message_create.event_id
+                    )
+        elif message_create.recipient_id:
+            # Direct message - notify recipient
+            await fcm_service.send_message_notification(
+                recipient_id=message_create.recipient_id,
+                sender_name=sender_name,
+                message_content=message_content
+            )
+    except Exception as e:
+        print(f"Error sending message notifications: {e}")
 
 
 class ConnectionManager:
@@ -122,6 +156,10 @@ async def handle_websocket_message(message_data: dict, sender_id: str):
         stored_message = await db.send_message(message_dict)
         if stored_message:
             print(f"✅ Message stored successfully: {stored_message['id']}")
+            
+            # Send FCM notifications
+            await send_message_notifications(stored_message, message_create, sender_id)
+            
             # Send to recipients
             if message_create.event_id:
                 # Event message

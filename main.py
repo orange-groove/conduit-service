@@ -13,7 +13,8 @@ from routers import (
     agenda_router,
     invitation_router,
     users_router,
-    pins_router
+    pins_router,
+    notifications_router
 )
 
 # Configure logging
@@ -55,6 +56,7 @@ app.include_router(agenda_router.router, prefix="/api/v1")
 app.include_router(invitation_router.router, prefix="/api/v1")
 app.include_router(users_router.router, prefix="/api/v1")
 app.include_router(pins_router.router, prefix="/api/v1")
+app.include_router(notifications_router.router, prefix="/api/v1")
 
 
 @app.get("/")

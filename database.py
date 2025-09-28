@@ -836,6 +836,59 @@ class SupabaseClient:
             print(f"Error ensuring video call for event {event_id}: {e}")
             return None
 
+    # Device Token Management
+    async def register_device_token(self, user_id: str, token: str, device_type: str, device_name: Optional[str] = None) -> bool:
+        """Register or update a device token for push notifications"""
+        try:
+            # Check if token already exists
+            existing = self.client.table("user_device_tokens").select("*").eq("token", token).execute()
+            
+            if existing.data:
+                # Update existing token
+                self.client.table("user_device_tokens").update({
+                    "user_id": user_id,
+                    "device_type": device_type,
+                    "device_name": device_name,
+                    "is_active": True,
+                    "updated_at": datetime.utcnow().isoformat()
+                }).eq("token", token).execute()
+            else:
+                # Insert new token
+                self.client.table("user_device_tokens").insert({
+                    "user_id": user_id,
+                    "token": token,
+                    "device_type": device_type,
+                    "device_name": device_name,
+                    "is_active": True
+                }).execute()
+            
+            return True
+        except Exception as e:
+            print(f"Error registering device token: {e}")
+            return False
+
+    async def unregister_device_token(self, user_id: str, token: str) -> bool:
+        """Unregister a device token"""
+        try:
+            self.client.table("user_device_tokens").update({
+                "is_active": False,
+                "updated_at": datetime.utcnow().isoformat()
+            }).eq("user_id", user_id).eq("token", token).execute()
+            
+            return True
+        except Exception as e:
+            print(f"Error unregistering device token: {e}")
+            return False
+
+    async def get_user_device_tokens(self, user_id: str) -> List[str]:
+        """Get active device tokens for a user"""
+        try:
+            response = self.client.table("user_device_tokens").select("token").eq("user_id", user_id).eq("is_active", True).execute()
+            return [token["token"] for token in response.data] if response.data else []
+        except Exception as e:
+            print(f"Error getting device tokens: {e}")
+            return []
+
 
 # Global database instance
 db = SupabaseClient()

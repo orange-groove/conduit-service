@@ -91,6 +91,18 @@ CREATE TABLE IF NOT EXISTS user_current_locations (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- User device tokens for push notifications
+CREATE TABLE IF NOT EXISTS user_device_tokens (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    user_id UUID REFERENCES profiles(id) ON DELETE CASCADE NOT NULL,
+    token TEXT NOT NULL UNIQUE,
+    device_type TEXT NOT NULL CHECK (device_type IN ('ios', 'android', 'web')),
+    device_name TEXT,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
 -- Agenda items table
 CREATE TABLE IF NOT EXISTS agenda_items (
     id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
@@ -459,3 +471,23 @@ DROP TRIGGER IF EXISTS user_events_participant_count ON user_events;
 CREATE TRIGGER user_events_participant_count
     AFTER INSERT OR UPDATE ON user_events
     FOR EACH ROW EXECUTE PROCEDURE update_event_participant_count();
+
+-- RLS Policies for user_device_tokens
+DROP POLICY IF EXISTS "Users can view their own device tokens" ON user_device_tokens;
+CREATE POLICY "Users can view their own device tokens" ON user_device_tokens
+    FOR SELECT USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can insert their own device tokens" ON user_device_tokens;
+CREATE POLICY "Users can insert their own device tokens" ON user_device_tokens
+    FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can update their own device tokens" ON user_device_tokens;
+CREATE POLICY "Users can update their own device tokens" ON user_device_tokens
+    FOR UPDATE USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can delete their own device tokens" ON user_device_tokens;
+CREATE POLICY "Users can delete their own device tokens" ON user_device_tokens
+    FOR DELETE USING (auth.uid() = user_id);
+
+-- Enable RLS on user_device_tokens
+ALTER TABLE user_device_tokens ENABLE ROW LEVEL SECURITY;

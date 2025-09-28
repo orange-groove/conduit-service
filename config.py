@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     # WebRTC Configuration
     webrtc_stun_server: str = "stun:stun.l.google.com:19302"
     
+    fcm_server_key: Optional[str] = None
+    
     class Config:
         env_file = ".env"
         case_sensitive = False

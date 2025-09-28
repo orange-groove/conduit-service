@@ -3,11 +3,33 @@ from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSoc
 from models import VideoCall, VideoCallCreate, User
 from auth import get_current_active_user
 from database import db
+from fcm_service import fcm_service
 import uuid
 from datetime import datetime
 import json
 
 router = APIRouter(prefix="/video", tags=["video-chat"])
+
+
+async def send_video_call_notifications(created_call: dict, caller: User):
+    """Send FCM notifications for video calls"""
+    try:
+        caller_name = caller.full_name or "Someone"
+        call_id = created_call.get("id")
+        event_id = created_call.get("event_id")
+        
+        # Get participants to notify
+        participants = created_call.get("participants", [])
+        
+        for participant_id in participants:
+            if participant_id != caller.id:  # Don't notify the caller
+                await fcm_service.send_video_call_notification(
+                    recipient_id=participant_id,
+                    caller_name=caller_name,
+                    event_id=event_id
+                )
+    except Exception as e:
+        print(f"Error sending video call notifications: {e}")
 
 
 class VideoConnectionManager:
@@ -206,6 +228,9 @@ async def create_video_call(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Failed to create video call"
         )
+    
+    # Send FCM notifications for video call
+    await send_video_call_notifications(created_call, current_user)
     
     return VideoCall(**created_call)
 
