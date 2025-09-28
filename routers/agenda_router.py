@@ -18,8 +18,8 @@ async def create_agenda_item(
     # Check if user is participant in the event
     user_events = await db.get_user_events(current_user.id)
     is_participant = any(
-        ue.get("events", {}).get("id") == agenda_data.event_id 
-        for ue in user_events
+        event.get("id") == agenda_data.event_id 
+        for event in user_events
     )
     
     if not is_participant:
@@ -30,6 +30,15 @@ async def create_agenda_item(
     
     # Prepare agenda item data
     agenda_dict = agenda_data.dict()
+    
+    # Handle empty strings for optional fields
+    if agenda_dict.get("end_time") == "":
+        agenda_dict["end_time"] = None
+    if agenda_dict.get("description") == "":
+        agenda_dict["description"] = None
+    if agenda_dict.get("location") == "":
+        agenda_dict["location"] = None
+    
     agenda_dict.update({
         "id": str(uuid.uuid4()),
         "creator_id": current_user.id,
@@ -58,8 +67,8 @@ async def get_event_agenda(
     # Check if user is participant in the event
     user_events = await db.get_user_events(current_user.id)
     is_participant = any(
-        ue.get("events", {}).get("id") == event_id 
-        for ue in user_events
+        event.get("id") == event_id 
+        for event in user_events
     )
     
     if not is_participant:
@@ -135,9 +144,28 @@ async def delete_agenda_item(
     current_user: User = Depends(get_current_active_user)
 ):
     """Delete an agenda item (only creator can delete)"""
-    # Note: Implement delete logic
-    # Check if user is creator of the agenda item
-    # Delete the agenda item from database
+    # Get the agenda item to check if it exists and if user is creator
+    agenda_item = await db.get_agenda_item(agenda_id)
+    if not agenda_item:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Agenda item not found"
+        )
+    
+    # Check if user is the creator
+    if agenda_item.get("creator_id") != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the creator can delete this agenda item"
+        )
+    
+    # Delete the agenda item
+    success = await db.delete_agenda_item(agenda_id)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to delete agenda item"
+        )
     
     return {"message": "Agenda item deleted successfully"}
 
@@ -155,8 +183,8 @@ async def get_user_calendar(
     all_agenda_items = []
     
     # Get agenda items for each event
-    for user_event in user_events:
-        event_id = user_event.get("events", {}).get("id")
+    for event in user_events:
+        event_id = event.get("id")
         if event_id:
             agenda_items = await db.get_event_agenda(event_id)
             

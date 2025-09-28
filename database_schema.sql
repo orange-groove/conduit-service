@@ -65,16 +65,30 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 
 -- User locations table
-CREATE TABLE IF NOT EXISTS user_locations (
-    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    user_id UUID REFERENCES profiles(id) ON DELETE CASCADE NOT NULL,
-    event_id UUID REFERENCES events(id) ON DELETE SET NULL,
+-- OLD TABLE (for migration reference)
+-- CREATE TABLE IF NOT EXISTS user_locations (
+--     id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+--     user_id UUID REFERENCES profiles(id) ON DELETE CASCADE NOT NULL,
+--     event_id UUID REFERENCES events(id) ON DELETE SET NULL,
+--     latitude DECIMAL(10, 8) NOT NULL CHECK (latitude >= -90 AND latitude <= 90),
+--     longitude DECIMAL(11, 8) NOT NULL CHECK (longitude >= -180 AND longitude <= 180),
+--     accuracy DECIMAL(10, 2),
+--     heading DECIMAL(5, 2),
+--     speed DECIMAL(8, 2),
+--     timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+-- );
+
+-- NEW OPTIMIZED TABLE: Single record per user
+CREATE TABLE IF NOT EXISTS user_current_locations (
+    user_id UUID PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE,
     latitude DECIMAL(10, 8) NOT NULL CHECK (latitude >= -90 AND latitude <= 90),
     longitude DECIMAL(11, 8) NOT NULL CHECK (longitude >= -180 AND longitude <= 180),
     accuracy DECIMAL(10, 2),
     heading DECIMAL(5, 2),
     speed DECIMAL(8, 2),
-    timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+    timestamp TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    is_shared BOOLEAN DEFAULT false,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 -- Agenda items table
@@ -148,9 +162,14 @@ CREATE INDEX IF NOT EXISTS idx_messages_event_id ON messages(event_id);
 CREATE INDEX IF NOT EXISTS idx_messages_recipient_id ON messages(recipient_id);
 CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
 
-CREATE INDEX IF NOT EXISTS idx_user_locations_user_id ON user_locations(user_id);
-CREATE INDEX IF NOT EXISTS idx_user_locations_event_id ON user_locations(event_id);
-CREATE INDEX IF NOT EXISTS idx_user_locations_timestamp ON user_locations(timestamp);
+-- OLD INDEXES (for migration reference)
+-- CREATE INDEX IF NOT EXISTS idx_user_locations_user_id ON user_locations(user_id);
+-- CREATE INDEX IF NOT EXISTS idx_user_locations_event_id ON user_locations(event_id);
+-- CREATE INDEX IF NOT EXISTS idx_user_locations_timestamp ON user_locations(timestamp);
+
+-- NEW INDEXES for optimized table
+CREATE INDEX IF NOT EXISTS idx_user_current_locations_shared ON user_current_locations(is_shared) WHERE is_shared = true;
+CREATE INDEX IF NOT EXISTS idx_user_current_locations_timestamp ON user_current_locations(timestamp);
 
 CREATE INDEX IF NOT EXISTS idx_agenda_items_event_id ON agenda_items(event_id);
 CREATE INDEX IF NOT EXISTS idx_agenda_items_start_time ON agenda_items(start_time);
@@ -239,24 +258,46 @@ DROP POLICY IF EXISTS "Users can send messages" ON messages;
 CREATE POLICY "Users can send messages" ON messages
     FOR INSERT WITH CHECK (auth.uid() = sender_id);
 
--- User locations policies
-ALTER TABLE user_locations ENABLE ROW LEVEL SECURITY;
+-- OLD POLICIES (for migration reference)
+-- ALTER TABLE user_locations ENABLE ROW LEVEL SECURITY;
+-- DROP POLICY IF EXISTS "Users can view locations in their events" ON user_locations;
+-- CREATE POLICY "Users can view locations in their events" ON user_locations
+--     FOR SELECT USING (
+--         auth.uid() = user_id OR
+--         (event_id IS NOT NULL AND EXISTS (
+--             SELECT 1 FROM user_events 
+--             WHERE user_events.event_id = user_locations.event_id 
+--             AND user_events.user_id = auth.uid()
+--             AND user_events.is_active = true
+--         ))
+--     );
+-- DROP POLICY IF EXISTS "Users can update their own location" ON user_locations;
+-- CREATE POLICY "Users can update their own location" ON user_locations
+--     FOR INSERT WITH CHECK (auth.uid() = user_id);
 
-DROP POLICY IF EXISTS "Users can view locations in their events" ON user_locations;
-CREATE POLICY "Users can view locations in their events" ON user_locations
+-- NEW POLICIES for optimized table
+ALTER TABLE user_current_locations ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users can view shared locations in their events" ON user_current_locations;
+CREATE POLICY "Users can view shared locations in their events" ON user_current_locations
     FOR SELECT USING (
         auth.uid() = user_id OR
-        (event_id IS NOT NULL AND EXISTS (
+        (is_shared = true AND EXISTS (
             SELECT 1 FROM user_events 
-            WHERE user_events.event_id = user_locations.event_id 
-            AND user_events.user_id = auth.uid()
+            WHERE user_events.user_id = auth.uid()
             AND user_events.is_active = true
+            AND EXISTS (
+                SELECT 1 FROM user_events ue2 
+                WHERE ue2.event_id = user_events.event_id 
+                AND ue2.user_id = user_current_locations.user_id
+                AND ue2.is_active = true
+            )
         ))
     );
 
-DROP POLICY IF EXISTS "Users can update their own location" ON user_locations;
-CREATE POLICY "Users can update their own location" ON user_locations
-    FOR INSERT WITH CHECK (auth.uid() = user_id);
+DROP POLICY IF EXISTS "Users can update their own location" ON user_current_locations;
+CREATE POLICY "Users can update their own location" ON user_current_locations
+    FOR ALL USING (auth.uid() = user_id);
 
 -- Agenda items policies
 ALTER TABLE agenda_items ENABLE ROW LEVEL SECURITY;

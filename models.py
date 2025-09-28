@@ -147,10 +147,15 @@ class Message(MessageBase):
 class AgendaItemBase(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
     description: Optional[str] = None
-    start_time: datetime
-    end_time: Optional[datetime] = None
+    start_time: str  # Accept ISO string from frontend
+    end_time: Optional[str] = None  # Accept ISO string from frontend
     location: Optional[str] = None
     is_all_day: bool = False
+
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
 
 
 class AgendaItemCreate(AgendaItemBase):
@@ -160,8 +165,8 @@ class AgendaItemCreate(AgendaItemBase):
 class AgendaItemUpdate(BaseModel):
     title: Optional[str] = Field(None, min_length=1, max_length=200)
     description: Optional[str] = None
-    start_time: Optional[datetime] = None
-    end_time: Optional[datetime] = None
+    start_time: Optional[str] = None  # Accept ISO string from frontend
+    end_time: Optional[str] = None  # Accept ISO string from frontend
     location: Optional[str] = None
     is_all_day: Optional[bool] = None
 
@@ -175,6 +180,9 @@ class AgendaItem(AgendaItemBase):
 
     class Config:
         from_attributes = True
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
 
 
 class UserLocationBase(BaseModel):
@@ -194,6 +202,16 @@ class UserLocation(UserLocationBase):
     user_id: str
     event_id: Optional[str] = None
     timestamp: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class UserCurrentLocation(UserLocationBase):
+    user_id: str
+    timestamp: datetime
+    is_shared: bool = False
+    updated_at: datetime
 
     class Config:
         from_attributes = True

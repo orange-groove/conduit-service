@@ -20,25 +20,38 @@ class ConnectionManager:
         await websocket.accept()
         self.active_connections.append(websocket)
         self.user_connections[user_id] = websocket
+        print(f"🔌 User {user_id} connected to messaging WebSocket")
     
     def disconnect(self, websocket: WebSocket, user_id: str):
         if websocket in self.active_connections:
             self.active_connections.remove(websocket)
         if user_id in self.user_connections:
             del self.user_connections[user_id]
+        print(f"🔌 User {user_id} disconnected from messaging WebSocket")
     
     async def send_personal_message(self, message: str, user_id: str):
         if user_id in self.user_connections:
             websocket = self.user_connections[user_id]
             await websocket.send_text(message)
+            print(f"📤 Sent direct message to user {user_id}")
+        else:
+            print(f"❌ User {user_id} not connected for direct message")
     
     async def send_event_message(self, message: str, event_id: str, sender_id: str):
-        # Get all participants of the event
-        if event_id in self.event_connections:
-            for user_id in self.event_connections[event_id]:
-                if user_id != sender_id and user_id in self.user_connections:
-                    websocket = self.user_connections[user_id]
-                    await websocket.send_text(message)
+        # Get all participants of the event from database
+        try:
+            participants = await db.get_event_participants(event_id)
+            if participants:
+                for participant in participants:
+                    user_id = participant.get("user_id")
+                    if user_id and user_id != sender_id and user_id in self.user_connections:
+                        websocket = self.user_connections[user_id]
+                        await websocket.send_text(message)
+                        print(f"📤 Sent event message to participant {user_id}")
+            else:
+                print(f"❌ No participants found for event {event_id}")
+        except Exception as e:
+            print(f"❌ Error sending event message: {e}")
     
     async def broadcast(self, message: str):
         for connection in self.active_connections:
@@ -71,12 +84,29 @@ async def handle_websocket_message(message_data: dict, sender_id: str):
     message_type = message_data.get("type")
     
     if message_type == "send_message":
+        # Handle undefined/null values from frontend
+        event_id = message_data.get("event_id")
+        recipient_id = message_data.get("recipient_id")
+        
+        # Convert undefined to None for proper handling
+        if event_id == "undefined" or event_id is None:
+            event_id = None
+        if recipient_id == "undefined" or recipient_id is None:
+            recipient_id = None
+            
+        print(f"📨 WebSocket message from {sender_id}: event_id={event_id}, recipient_id={recipient_id}")
+        
+        # Validate message has either event_id or recipient_id
+        if not event_id and not recipient_id:
+            print(f"❌ Message missing both event_id and recipient_id")
+            return
+        
         # Create and store message
         message_create = MessageCreate(
             content=message_data.get("content", ""),
             message_type=message_data.get("message_type", "text"),
-            event_id=message_data.get("event_id"),
-            recipient_id=message_data.get("recipient_id"),
+            event_id=event_id,
+            recipient_id=recipient_id,
             metadata=message_data.get("metadata")
         )
         
@@ -91,9 +121,11 @@ async def handle_websocket_message(message_data: dict, sender_id: str):
         
         stored_message = await db.send_message(message_dict)
         if stored_message:
+            print(f"✅ Message stored successfully: {stored_message['id']}")
             # Send to recipients
             if message_create.event_id:
                 # Event message
+                print(f"📤 Broadcasting event message to event {message_create.event_id}")
                 await manager.send_event_message(
                     json.dumps({
                         "type": "new_message",
@@ -104,6 +136,7 @@ async def handle_websocket_message(message_data: dict, sender_id: str):
                 )
             elif message_create.recipient_id:
                 # Direct message
+                print(f"📤 Sending direct message to user {message_create.recipient_id}")
                 await manager.send_personal_message(
                     json.dumps({
                         "type": "new_message",
@@ -111,6 +144,8 @@ async def handle_websocket_message(message_data: dict, sender_id: str):
                     }),
                     message_create.recipient_id
                 )
+        else:
+            print(f"❌ Failed to store message")
 
 
 @router.post("/", response_model=Message)

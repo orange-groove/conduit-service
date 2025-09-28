@@ -2,6 +2,7 @@ from supabase import create_client, Client
 from config import settings
 import asyncio
 from typing import Optional, Dict, Any, List
+from datetime import datetime
 
 
 class SupabaseClient:
@@ -206,7 +207,7 @@ class SupabaseClient:
             return None
     
     async def get_user_events(self, user_id: str) -> List[Dict[str, Any]]:
-        """Get all events for a user"""
+        """Get all events for a user with accurate participant counts"""
         try:
             # First get the user's event IDs
             user_events_response = self.client.table("user_events").select("event_id").eq("user_id", user_id).eq("is_active", True).execute()
@@ -220,7 +221,26 @@ class SupabaseClient:
             # Get the actual events
             events_response = self.client.table("events").select("*").in_("id", event_ids).execute()
             
-            return events_response.data or []
+            if not events_response.data:
+                return []
+            
+            # For each event, get the actual participant count
+            events_with_counts = []
+            for event in events_response.data:
+                try:
+                    # Get actual participant count
+                    participants_response = self.client.table("user_events").select("user_id").eq("event_id", event["id"]).eq("is_active", True).execute()
+                    actual_count = len(participants_response.data) if participants_response.data else 0
+                    
+                    # Update the event with accurate count
+                    event["participant_count"] = actual_count
+                    events_with_counts.append(event)
+                except Exception as e:
+                    print(f"Error getting participant count for event {event.get('id', 'unknown')}: {e}")
+                    # Use stored count as fallback
+                    events_with_counts.append(event)
+            
+            return events_with_counts
         except Exception as e:
             print(f"Error fetching user events: {e}")
             return []
@@ -314,34 +334,71 @@ class SupabaseClient:
                 return []
     
     async def update_user_location(self, user_id: str, location_data: Dict[str, Any]) -> bool:
-        """Update user's current location"""
+        """Update user's current location using UPSERT approach"""
         try:
-            location_data["user_id"] = user_id
-            self.client.table("user_locations").insert(location_data).execute()
+            # Use UPSERT to update existing record or create new one
+            response = self.client.table("user_current_locations").upsert({
+                "user_id": user_id,
+                "latitude": location_data["latitude"],
+                "longitude": location_data["longitude"],
+                "accuracy": location_data.get("accuracy"),
+                "heading": location_data.get("heading"),
+                "speed": location_data.get("speed"),
+                "timestamp": location_data.get("timestamp", datetime.utcnow().isoformat()),
+                "updated_at": datetime.utcnow().isoformat()
+            }).execute()
+            
             return True
         except Exception as e:
             print(f"Error updating location: {e}")
             return False
     
-    async def get_event_locations(self, event_id: str) -> List[Dict[str, Any]]:
-        """Get current locations of all event participants"""
+    async def get_user_current_location(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Get user's current location"""
         try:
-            response = self.client.table("user_locations").select("""
+            response = self.client.table("user_current_locations").select("""
                 *,
                 user:user_id (id, full_name, avatar_url)
-            """).eq("event_id", event_id).order("timestamp", desc=True).execute()
+            """).eq("user_id", user_id).execute()
             
-            # Get the latest location for each user
-            latest_locations = {}
-            for location in response.data or []:
-                user_id = location["user_id"]
-                if user_id not in latest_locations:
-                    latest_locations[user_id] = location
-            
-            return list(latest_locations.values())
+            return response.data[0] if response.data else None
         except Exception as e:
-            print(f"Error fetching event locations: {e}")
+            print(f"Error getting user location: {e}")
+            return None
+
+    async def get_event_locations(self, event_id: str) -> List[Dict[str, Any]]:
+        """Get current locations of all event participants who have shared their location"""
+        try:
+            # Get all participants of the event
+            participants = await self.get_event_participants(event_id)
+            if not participants:
+                return []
+            
+            participant_ids = [p["user_id"] for p in participants]
+            
+            # Get current locations for all participants who are sharing
+            response = self.client.table("user_current_locations").select("""
+                *,
+                user:user_id (id, full_name, avatar_url)
+            """).in_("user_id", participant_ids).eq("is_shared", True).execute()
+            
+            return response.data or []
+        except Exception as e:
+            print(f"Error getting event locations: {e}")
             return []
+
+    async def set_location_sharing(self, user_id: str, is_shared: bool) -> bool:
+        """Enable/disable location sharing for user"""
+        try:
+            self.client.table("user_current_locations").update({
+                "is_shared": is_shared,
+                "updated_at": datetime.utcnow().isoformat()
+            }).eq("user_id", user_id).execute()
+            
+            return True
+        except Exception as e:
+            print(f"Error setting location sharing: {e}")
+            return False
 
     async def get_event_participants_with_latest_location(self, event_id: str) -> List[Dict[str, Any]]:
         """Return all participants with their latest location (may be None).
@@ -405,8 +462,23 @@ class SupabaseClient:
             response = self.client.table("agenda_items").select("*").eq("event_id", event_id).order("start_time").execute()
             return response.data or []
         except Exception as e:
-            print(f"Error fetching event agenda: {e}")
             return []
+
+    async def get_agenda_item(self, agenda_id: str) -> Optional[Dict[str, Any]]:
+        """Get a specific agenda item by ID"""
+        try:
+            response = self.client.table("agenda_items").select("*").eq("id", agenda_id).execute()
+            return response.data[0] if response.data else None
+        except Exception as e:
+            return None
+
+    async def delete_agenda_item(self, agenda_id: str) -> bool:
+        """Delete an agenda item"""
+        try:
+            self.client.table("agenda_items").delete().eq("id", agenda_id).execute()
+            return True
+        except Exception as e:
+            return False
     
     # Event Invitations
     async def create_event_invitation(self, invitation_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
